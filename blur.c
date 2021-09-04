@@ -1,7 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "mpi.h"
-#define DIM 5
 
 void printRow(int A[], int me, int dim) {
     for (int i = 0; i < dim; i++)
@@ -21,7 +20,7 @@ int parse_args(int argc, char *argv[], int *dim, int *n_depth) {
 }
 
 int main(int argc, char *argv[]) {
-    int me, size, dim, sum, row, r, col, c, n_depth, l;
+    int me, size, dim, sum, n_sum, row, r, col, c, n_depth, l, i, j, x, n;
 
 
     MPI_Init(&argc, &argv);
@@ -40,54 +39,177 @@ int main(int argc, char *argv[]) {
     MPI_Bcast(&n_depth, 1, MPI_INT, 0, MPI_COMM_WORLD);
 
     int A[dim][dim];
-    // int B[dim][dim];
+    int sDim = dim+2*n_depth;
+    int superA[sDim][sDim];
+    int B[dim][dim];
+    int Arow[n_depth*2][sDim];
 
-    // Define test matrix of variable dimension size
-    for (int i = 0; i < dim; i++) {
-        for (int j = 0; j < dim; j++) {
-            A[i][j] = i+j*2;
-            // B[i][j] = 0;
+    if (me == 0) {
+        // Define test matrix of variable dimension size
+        for (i = 0; i < dim; i++) {
+            for (j = 0; j < dim; j++) {
+                A[i][j] = i+j*2;
+                B[i][j] = 0;
+            }
+        }
+
+        // Print matrix to console
+        if (me == 0) {
+            printf("Before:\n");
+            for (i = 0; i < dim; i++)
+                printRow(A[i], me, dim);
+            printf("\n\n");
+        }
+
+        /* initialize supersized matrix */
+        for (row = 0; row < sDim; row++) {
+        for (col = 0; col < n_depth; col++) {
+            // Set frame around superA of 0s
+            superA[row][col] = superA[row][sDim-col-1] = 0;
+            superA[col][row] = superA[sDim-col-1][row] = 0;
+        }
+        }
+
+        // Place A into superA
+        for (i = 0; i < dim; i++) {
+            for (j = 0; j < dim; j++)
+                superA[i+n_depth][j+n_depth] = A[i][j];
+        }
+
+        printf("SuperA: \n");
+        for (i = 0; i < sDim; i++) {
+            for (j = 0; j < sDim; j++)
+            printf(" %d", superA[i][j]);
+            printf("\n");
         }
     }
 
-    // Print matrix to console
-    if (me == 0) {
-        printf("Before:\n");
-        for (int i = 0; i < dim; i++)
-            printRow(A[i], me, dim);
-        printf("\n\n");
+    for (i = 0; i < n_depth*2+1; i++) {
+        if (MPI_Scatter(&superA[i], sDim, MPI_INT,
+                        &Arow[i], sDim, MPI_INT,
+                        0, MPI_COMM_WORLD) != MPI_SUCCESS) {
+                            fprintf(stderr, "Scattering of A failed\n");
+                            MPI_Finalize();
+                            exit(EXIT_FAILURE);
+                        }
     }
 
-    if (me == 0) {
-        row = 2;
-        col = 2;
-        r = row-n_depth;
-        c = col-n_depth;
-        l = n_depth*2+1; // Length of neighbours dimension
+    printf("Process %d got:\n", me);
+    for (i = 0; i < 2*n_depth+1; i++) {
+        for (j = 0; j < sDim; j++) 
+            printf(" %d", Arow[i][j]);
+        printf("\n");
+    }
+
+
+    x = n_depth;
+    // For each cell in our designated row to calculate
+    for (int y = n_depth; y < n_depth+dim; y++) {
         sum = 0;
-        for (int i = 0; i < l; i++) {
-            if ((r+i) >= 0 && (r+i) <= dim-1 && c >= 0 && c <= dim-1) {
-                printf("Left[%d][%d]: %d\n",r+i, c, A[r+i][c]);
-                sum += A[r+i][c]; // Fetch neighbours left side
+        // r = x-n_depth;
+        // c = x-n_depth;
+        // For each row
+        // for (r = x-n_depth; r < 2*n_depth+1; r++) {
+        //     // For each col
+        //     for (c = x-n_depth; c < 2*n_depth+1; c++) {
+        //         // Sum the cells
+        //         sum += Arow[r][c];
+        //     }
+        // }
+
+        printf("Cell[%d][%d] = %d\n", x, y, Arow[x][y]);
+
+        for (n = 1; n <= n_depth; n++) {
+            n_sum = 0;
+            for (i = y-n; i <= y+n; i++) {
+                printf("%d += %d\n", n_sum, Arow[x-n][i] + Arow[x+n][i]);
+                n_sum += Arow[x-n][i] + Arow[x+n][i];
+                // printf("Top[%d][%d]: %d\n", x-n, i, Arow[x-n][i]);
+                // printf("Bottom[%d][%d]: %d\n", x+n, i, Arow[x+n][i]);
             }
-            if ((r+i) >= 0 && (r+i) <= dim-1 && (c+l-1) >= 0 && (c+l-1) <= dim-1) {
-                printf("Right[%d][%d]: %d\n",r+i, c+l-1, A[r+i][c+l-1]);
-                sum += A[r+i][c+l-1]; // Fetch neighbours right side
+            for (i = x-n+1; i <= x+n-1; i++) {
+                printf("%d += %d\n", n_sum, Arow[i][y-n] + Arow[i][y+n]);
+                n_sum += Arow[i][y-n] + Arow[i][y+n];
+                
+                // printf("Left[%d][%d]: %d\n", i, y-n, Arow[i][y-n]);
+                // printf("Right[%d][%d]: %d\n", i, y+n, Arow[i][y+n]);
             }
-            
-            if (i > 0 && i < l-1) {
-                if (r >= 0 && r <= dim-1 && c+i >= 0 && c+i <= dim-1) {
-                    printf("Top[%d][%d]: %d\n", r, c+i, A[r][c+i]);
-                    sum += A[r][c+i]; // Fetch neighbours top
+            // printf("Depth: %d got sum %d\n", n, n_sum);
+            printf("Sum %d += %d/%d\n", sum, n_sum, n);
+            sum += n_sum/n;
+            // printf("%d\n", sum);
+        }
+
+        // For each layer of neighbours
+        // for (n = 1; n <= n_depth; n++) {
+        //     r = x-n;
+        //     c = n_depth-n;
+        //     n_sum = 0;
+
+        //     // l = 2*n_depth+1;
+
+        //     // Get left
+        //     // Get right
+        //     for (j = c; j < 2*n+1+c; j++) {
+        //         n_sum += Arow[j][r];
+        //         printf("Adding[%d][%d]: %d\n", j, r, Arow[j][r]);
+        //         // printf("Adding[%d][%d]: %d\n", j, x+n, Arow[j][x+n]);
+        //     }
+        //     printf("\n");
+
+        //     // Get top
+        //     // Get bottom
+        //     for (j = r+1; j < 2*n; j++) {
+        //         n_sum += Arow[x-n][j] + Arow[x+n][j];
+        //     }
+
+        //     sum = n_sum/n;
+           
+
+        // }
+        printf("Arow[%d][%d] (%d) sum: %d\n", n_depth, x, Arow[n_depth][x], sum);
+    }
+    
+    if (me == 0) {
+        // row = 2;
+        for (row = 0; row < dim; row++) {
+            for (col = 0; col < dim; col++) {
+                r = row-n_depth;
+                c = col-n_depth;
+                l = n_depth*2+1; // Length of neighbours dimension
+                sum = 0;
+                for (i = 0; i < l; i++) {
+                    if ((r+i) >= 0 && (r+i) < dim && c >= 0 && c < dim) {
+                        // printf("Left[%d][%d]: %d\n",r+i, c, A[r+i][c]);
+                        sum += A[r+i][c]; // Fetch neighbours left side
+                    }
+                    if ((r+i) >= 0 && (r+i) < dim && (c+l-1) >= 0 && (c+l-1) < dim) {
+                        // printf("Right[%d][%d]: %d\n",r+i, c+l-1, A[r+i][c+l-1]);
+                        sum += A[r+i][c+l-1]; // Fetch neighbours right side
+                    }
+                    
+                    if (i > 0 && i < l-1) {
+                        if (r >= 0 && r < dim && c+i >= 0 && c+i < dim) {
+                            // printf("Top[%d][%d]: %d\n", r, c+i, A[r][c+i]);
+                            sum += A[r][c+i]; // Fetch neighbours top
+                        }
+                        if (r+l-1 >= 0 && r+l-1 < dim && c+i >= 0 && c+i < dim) {
+                            // printf("Bottom[%d][%d]: %d\n", r+l-1, c+i, A[r+l-1][c+i]);
+                            sum += A[r+l-1][c+i]; // Fetch neighbours bottom
+                        }
+                    }
                 }
-                if (r+l-1 >= 0 && r+l-1 <= dim-1 && c+i >= 0 && c+i <= dim-1) {
-                    printf("Bottom[%d][%d]: %d\n", r+l-1, c+i, A[r+l-1][c+i]);
-                    sum += A[r+l-1][c+i]; // Fetch neighbours bottom
-                }
+                sum = sum/n_depth;
+                B[row][col] = sum;
+                // printf("Blur of A[%d][%d](%d) is %d\n", row, col, A[row][col], sum);
             }
         }
-        sum = sum/n_depth;
-        printf("Blur of A[%d][%d](%d) is %d\n", row, col, A[row][col], sum);
+         if (me == 0) {
+            printf("After:\n");
+            for (i = 0; i < dim; i++)
+                printRow(B[i], me, dim);
+            printf("\n\n");
+            }
     }
 
     MPI_Finalize();
